@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+librosa
+soundfile
+numpy
+matplotlib
+reportlab
+torch
+torchaudio
+speechbrain
+pydantic

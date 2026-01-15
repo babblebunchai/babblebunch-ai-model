@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Babblebunch AI – Speech Report</title>
+
+  <style>
+    body {
+      font-family: "Segoe UI", Arial;
+      background: linear-gradient(135deg, #f9fbff, #eef2ff);
+      padding: 40px;
+    }
+
+    .card {
+      background: white;
+      max-width: 420px;
+      margin: auto;
+      padding: 28px;
+      border-radius: 14px;
+      box-shadow: 0 10px 25px rgba(0,0,0,.12);
+      text-align: center;
+    }
+
+    h2 {
+      color: #E63946;
+      margin-bottom: 6px;
+    }
+
+    small {
+      color: #666;
+    }
+
+    input, button {
+      width: 90%;
+      padding: 12px;
+      margin-top: 12px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    input {
+  border: 0.6px solid #d5d8e0;
+  border-radius: 6px;
+  padding: 10px 12px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+input:focus {
+  border-color: #E63946;
+  box-shadow: 0 0 0 2px rgba(230,57,70,0.12);
+}
+
+    button {
+      border: none;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    .primary {
+      background: #E63946;
+      color: white;
+    }
+
+    .secondary {
+      background: #457B9D;
+      color: white;
+    }
+
+    .danger {
+      background: #333;
+      color: white;
+    }
+
+    .record-box {
+      margin-top: 15px;
+      padding: 15px;
+      border-radius: 10px;
+      background: #f4f6ff;
+    }
+
+    #timer {
+      font-size: 18px;
+      font-weight: bold;
+      color: #E63946;
+      margin-top: 8px;
+    }
+
+    #status {
+      margin-top: 10px;
+      font-weight: bold;
+    }
+
+    .mic {
+      font-size: 30px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="card">
+
+  <h2>Babblebunch AI</h2>
+  <small>Child Speech Analysis Report</small>
+
+  <input id="childName" placeholder="Child Name" required>
+ 
+ <div style="height:14px"></div>
+
+  📁 <b>Upload audio</b>
+  <input type="file" id="fileInput" accept="audio/*">
+
+  <div class="record-box">
+    🎤 <b>Or record live</b>
+
+    <div class="mic" id="mic">🎙️</div>
+
+    <button class="secondary" onclick="startRecording()">Start Recording</button>
+    <button class="danger" onclick="stopRecording()">Stop Recording</button>
+
+    <div id="timer">00:00</div>
+    <div id="status"></div>
+  </div>
+
+  <button class="primary" onclick="submitAudio()">Generate Report</button>
+
+</div>
+
+<script>
+let recorder;
+let audioChunks = [];
+let recording = false;
+let seconds = 0;
+let timerInterval;
+
+function startRecording() {
+  if (recording) return;
+
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+    recorder = new MediaRecorder(stream);
+    recorder.start();
+    audioChunks = [];
+    recording = true;
+
+    recorder.ondataavailable = e => audioChunks.push(e.data);
+
+    seconds = 0;
+    document.getElementById("status").innerText = "🔴 Recording in progress...";
+    document.getElementById("mic").innerText = "🔴🎙️";
+
+    timerInterval = setInterval(() => {
+      seconds++;
+      document.getElementById("timer").innerText =
+        String(Math.floor(seconds / 60)).padStart(2, "0") + ":" +
+        String(seconds % 60).padStart(2, "0");
+    }, 1000);
+  });
+}
+
+function stopRecording() {
+  if (!recording) return;
+
+  recorder.stop();
+  recording = false;
+  clearInterval(timerInterval);
+
+  document.getElementById("status").innerText = "✅ Recording stopped";
+  document.getElementById("mic").innerText = "🎙️";
+}
+
+async function submitAudio() {
+  const name = document.getElementById("childName").value;
+  if (!name) {
+    alert("Please enter child name");
+    return;
+  }
+
+  let audioFile = document.getElementById("fileInput").files[0];
+
+  if (!audioFile && audioChunks.length > 0) {
+    audioFile = new Blob(audioChunks, { type: "audio/wav" });
+  }
+
+  if (!audioFile) {
+    alert("Please upload or record audio");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("child_name", name);
+  formData.append("audio", audioFile, "speech.wav");
+
+  document.getElementById("status").innerText = "⏳ Generating report...";
+
+  const res = await fetch("/upload", {
+    method: "POST",
+    body: formData
+  });
+
+  const data = await res.json();
+  document.getElementById("status").innerText = data.message || "Report generated";
+}
+</script>
+
+</body>
+</html>
