@@ -6,7 +6,7 @@ soundfile
 numpy
 matplotlib
 reportlab
-torch
-torchaudio
+torch==2.1.2
+torchaudio==2.1.2
 speechbrain
 pydantic
