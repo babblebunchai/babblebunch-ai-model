@@ -3,33 +3,29 @@
 # =========================================================
 
 import os
-import glob
 import datetime
 import io
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from PIL import Image as PILImage, ImageDraw, ImageFont
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, Flowable
 )
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
-from reportlab.lib.utils import ImageReader
 
 import librosa
-import torchaudio
-import torch
-from speechbrain.pretrained import EncoderClassifier
 
 
 # --------------------- CONFIG ---------------------
-OUTPUT_DIR = r"C:\Users\Isha Arora\OneDrive\Documents\AI_Reports"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join("/tmp", "reports")
 BRAND_NAME = "Babblebunch AI"
 WEBSITE_URL = "www.babblebunchai.com"
-LOGO_PATH = "logo.png"
-AVATAR_PATH = "avatar.png"
+LOGO_PATH = os.path.join(BASE_DIR, "logo.png")
 BACKGROUND_COLOR = colors.HexColor("#FFFFFF")  # soft peach
 HeaderBackground = colors.HexColor("#FFFFFF")  # light pink
 # or "#F9FBFF" (light blue)
@@ -58,9 +54,11 @@ class ColorBanner(Flowable):
 # MAIN CLASS
 # =========================================================
 class SpeechFeedback:
-    def __init__(self, audio_path):
+    def __init__(self, audio_path, child_name):
         self.audio_path = audio_path
-        self.child_name = os.path.splitext(os.path.basename(audio_path))[0]
+        self.child_name = child_name.strip()
+
+        self.timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
         self.y, self.sr = librosa.load(audio_path, sr=None, mono=True)
 
@@ -75,6 +73,13 @@ class SpeechFeedback:
         self.clarity_db = 0
 
         self.analyze_audio()
+
+        # ✅ ADD THIS RIGHT BELOW __init__
+    def _safe_name(self, name):
+        return "".join(
+            c for c in name
+            if c.isalnum() or c in (" ", "_", "-")
+        ).strip()
 
     # -----------------------------------------------------
     # Audio Analysis
@@ -470,8 +475,9 @@ class SpeechFeedback:
     # -----------------------------------------------------
     def generate_parent_report(self):
         pdf_path = os.path.join(
-            OUTPUT_DIR, f"{self.child_name}_Parent_Report.pdf"
-        )
+        OUTPUT_DIR,
+        f"{self.child_name}_{self.timestamp}_Parent_Report.pdf"
+     )
 
         doc = SimpleDocTemplate(pdf_path, pagesize=A4)
         styles = getSampleStyleSheet()
@@ -549,13 +555,17 @@ class SpeechFeedback:
              )
                
         print("✅ Parent Report Saved:", pdf_path)
+        return pdf_path
 
 
     # -----------------------------------------------------
     # PDF
     # -----------------------------------------------------
     def generate_pdf(self):
-        pdf_path = os.path.join(OUTPUT_DIR, f"{self.child_name}.pdf")
+        pdf_path = os.path.join(
+        OUTPUT_DIR,
+        f"{self.child_name}_{self.timestamp}_Speech_Report.pdf"
+         )
         doc = SimpleDocTemplate(pdf_path, pagesize=A4)
 
         styles = getSampleStyleSheet()
@@ -610,10 +620,12 @@ class SpeechFeedback:
              )
 
         print("✅ Saved:", pdf_path)
-        try:
-            os.startfile(pdf_path)
-        except Exception:
-            pass
+        return pdf_path
+
+        # try:
+        #     os.startfile(pdf_path)
+        # except Exception:
+        #     pass
     # -----------------------------------------------------
 # Page Background (Full Page)
 # -----------------------------------------------------
@@ -697,23 +709,21 @@ class SpeechFeedback:
 # =========================================================
 # RUN FOR ALL MP3
 # =========================================================
-if __name__ == "__main__":
-    folder = r"C:\Users\Isha Arora\OneDrive\Desktop"
-    mp3s = glob.glob(os.path.join(folder, "*.mp3"))
+# if __name__ == "__main__":
+#     folder = r"C:\Users\Isha Arora\OneDrive\Desktop"
+#     mp3s = glob.glob(os.path.join(folder, "*.mp3"))
 
-    if not mp3s:
-        print("⚠️ No MP3 files found!")
+#     if not mp3s:
+#         print("⚠️ No MP3 files found!")
 
-    for audio in mp3s:
-        print("\nProcessing:", audio)
+#     for audio in mp3s:
+#         print("\nProcessing:", audio)
 
-        sf = SpeechFeedback(audio)
-        sf.generate_pdf()                 # Team / Internal Report
-        try:
-           sf.generate_parent_report()
-        except Exception as e:
-           print("⚠️ Parent report failed:", e)     # Parent Report
+#         sf = SpeechFeedback(audio)
+#         sf.generate_pdf()                 # Team / Internal Report
+#         try:
+#            sf.generate_parent_report()
+#         except Exception as e:
+#            print("⚠️ Parent report failed:", e)     # Parent Report
 
-
-
-
+        

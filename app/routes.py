@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, Form
+from fastapi.responses import FileResponse
 import os, shutil
 from app.services.speech_service import generate_report
 
@@ -7,7 +8,7 @@ router = APIRouter()
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-@router.post("/upload")
+@router.post("/analyze")
 async def upload_audio(
     child_name: str = Form(...),
     audio: UploadFile = File(...)
@@ -17,6 +18,10 @@ async def upload_audio(
     with open(file_path, "wb") as f:
         shutil.copyfileobj(audio.file, f)
 
-    result = generate_report(file_path, child_name)
+    zip_path = generate_report(file_path, child_name)
 
-    return {"message": result}
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename="Babblebunch_AI_Reports.zip"
+    )

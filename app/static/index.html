@@ -193,13 +193,39 @@ async function submitAudio() {
 
   document.getElementById("status").innerText = "⏳ Generating report...";
 
-  const res = await fetch("/upload", {
+  // ✅ DISABLE BUTTON HERE
+  const btn = document.querySelector(".primary");
+  btn.disabled = true;
+  btn.innerText = "Generating...";
+
+  const res = await fetch("/analyze", {
     method: "POST",
     body: formData
   });
 
-  const data = await res.json();
-  document.getElementById("status").innerText = data.message || "Report generated";
+  if (!res.ok) {
+    alert("Failed to generate report");
+    btn.disabled = false;
+    btn.innerText = "Generate Report";
+    return;
+  }
+
+  const blob = await res.blob();
+
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "Babblebunch_AI_Reports.zip";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  document.getElementById("status").innerText =
+    "✅ Reports downloaded successfully";
+
+  // ✅ RE-ENABLE BUTTON HERE
+  btn.disabled = false;
+  btn.innerText = "Generate Report";
 }
 </script>
 

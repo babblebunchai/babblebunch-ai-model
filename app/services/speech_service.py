@@ -1,24 +1,22 @@
 import os
-from pathlib import Path
-
-# IMPORT YOUR EXISTING CLASS
-# ⚠️ If SpeechFeedback is in SAME FILE, remove this import
+import zipfile
+import uuid
 from speaker_recognition import SpeechFeedback
 
-OUTPUT_DIR = "reports"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+REPORT_DIR = "reports"
+os.makedirs(REPORT_DIR, exist_ok=True)
 
-def generate_report(audio_path: str, child_name: str):
-    """
-    Generates both internal + parent PDF reports
-    """
+def generate_report(file_path, child_name):
+    sf = SpeechFeedback(file_path, child_name)
 
-    sf = SpeechFeedback(audio_path)
+    internal_pdf = sf.generate_pdf()
+    parent_pdf = sf.generate_parent_report()
 
-    # override name from UI
-    sf.child_name = child_name
+    zip_id = uuid.uuid4().hex
+    zip_path = os.path.join(REPORT_DIR, f"{child_name}_{zip_id}.zip")
 
-    sf.generate_pdf()
-    sf.generate_parent_report()
+    with zipfile.ZipFile(zip_path, "w") as zipf:
+        zipf.write(internal_pdf, os.path.basename(internal_pdf))
+        zipf.write(parent_pdf, os.path.basename(parent_pdf))
 
-    return f"Reports generated for {child_name}"
+    return zip_path
