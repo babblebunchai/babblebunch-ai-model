@@ -28,6 +28,7 @@ WEBSITE_URL = "www.babblebunchai.com"
 LOGO_PATH = os.path.join(BASE_DIR, "logo.png")
 BACKGROUND_COLOR = colors.HexColor("#FFFFFF")  # soft peach
 HeaderBackground = colors.HexColor("#FFFFFF")  # light pink
+ENABLE_CHART = False
 # or "#F9FBFF" (light blue)
 # or "#F6FFF8" (mint)
 
@@ -56,11 +57,19 @@ class ColorBanner(Flowable):
 class SpeechFeedback:
     def __init__(self, audio_path, child_name):
         self.audio_path = audio_path
-        self.child_name = child_name.strip()
+        self.child_name = self._safe_name(child_name)
 
         self.timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
         self.y, self.sr = librosa.load(audio_path, sr=None, mono=True)
+
+        # ===============================
+        # LIMIT AUDIO EARLY (CRITICAL)
+        # ===============================
+        MAX_DURATION = 20  # seconds
+
+        if len(self.y) / self.sr > MAX_DURATION:
+         self.y = self.y[: int(self.sr * MAX_DURATION)]
 
         # Metrics
         self.energy = 0
@@ -107,18 +116,31 @@ class SpeechFeedback:
         except:
             self.pauses_ratio = 1.0
 
-        # Pitch
+       # ===============================
+       # FAST PITCH ESTIMATION (RENDER SAFE)
+       # ===============================
+        # FAST PITCH ESTIMATION
         try:
-            f0, _, _ = librosa.pyin(self.y, fmin=80, fmax=450, sr=self.sr)
-            vals = f0[~np.isnan(f0)]
-            self.pitch_mean = float(np.mean(vals)) if len(vals) else 0
-            self.pitch_std = float(np.std(vals)) if len(vals) else 0
+         pitches, magnitudes = librosa.piptrack(y=self.y, sr=self.sr)
+         pitch_vals = pitches[pitches > 0]
+         self.pitch_mean = float(np.mean(pitch_vals)) if len(pitch_vals) else 0
+         self.pitch_std = float(np.std(pitch_vals)) if len(pitch_vals) else 0
         except:
-            self.pitch_mean = 0
-            self.pitch_std = 0
+         self.pitch_mean = 0
+         self.pitch_std = 0
 
         # Duration
         self.duration = len(self.y) / self.sr
+
+        # ===============================
+        # LIMIT AUDIO DURATION (RENDER OPTIMIZATION)
+        # ===============================
+        # MAX_DURATION = 20  # seconds (safe for child speech)
+
+        # if self.duration > MAX_DURATION:
+        #  self.y = self.y[: int(self.sr * MAX_DURATION)]
+        #  self.duration = MAX_DURATION
+  
 
         # Speaking rate
         if self.duration > 0:
@@ -585,9 +607,10 @@ class SpeechFeedback:
         for item in self.build_header(styles):
          story.append(item)
 
-        chart_bytes = self.radar_chart()
-        story.append(Image(chart_bytes, width=160*mm, height=110*mm))
-        story.append(Spacer(1, 15))
+        if ENABLE_CHART:
+         chart_bytes = self.radar_chart()
+         story.append(Image(chart_bytes, width=160*mm, height=110*mm))
+         story.append(Spacer(1, 15))
 
         # ===== METRICS TABLE =====
         story.append(Paragraph("<b>Speech Analysis Metrics</b>", styles["Heading3"]))
