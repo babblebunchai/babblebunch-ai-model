@@ -5,6 +5,13 @@ from app.routes import router
 
 app = FastAPI(title="Babblebunch AI")
 
+# =========================
+# HEALTH CHECK (Render wake-up)
+# =========================
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 # CORS (safe for frontend)
 app.add_middleware(
     CORSMiddleware,
