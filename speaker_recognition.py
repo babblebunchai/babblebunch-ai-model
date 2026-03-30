@@ -1,7 +1,6 @@
 import os
 import re
 import io
-import math
 import datetime
 import numpy as np
 import librosa
@@ -29,12 +28,25 @@ import torch
 OUTPUT_DIR = "reports"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Whisper model
-WHISPER_MODEL = whisper.load_model("medium")
+# Lazy loaded models (Render-safe)
+WHISPER_MODEL = None
+WAV2VEC_MODEL = None
+WAV2VEC_PROCESSOR = None
 
-# Pronunciation helper model
-WAV2VEC_MODEL = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-base-960h")
-WAV2VEC_PROCESSOR = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
+
+def get_whisper():
+    global WHISPER_MODEL
+    if WHISPER_MODEL is None:
+        WHISPER_MODEL = whisper.load_model("tiny")
+    return WHISPER_MODEL
+
+
+def get_wav2vec():
+    global WAV2VEC_MODEL, WAV2VEC_PROCESSOR
+    if WAV2VEC_MODEL is None or WAV2VEC_PROCESSOR is None:
+        WAV2VEC_MODEL = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-base-960h")
+        WAV2VEC_PROCESSOR = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
+    return WAV2VEC_MODEL, WAV2VEC_PROCESSOR
 
 
 # =========================================================
@@ -66,7 +78,12 @@ class SpeechFeedback:
         self.child_name = child_name
         self.timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
-        self.y, self.sr = librosa.load(audio_path, sr=None)
+        try:
+            self.y, self.sr = librosa.load(audio_path, sr=None)
+        except Exception as e:
+            print("Audio load error:", e)
+            self.y = np.zeros(16000)
+            self.sr = 16000
 
         # Limit to first 20 sec for stable evaluation
         if len(self.y) / self.sr > 20:
@@ -169,21 +186,14 @@ class SpeechFeedback:
             repetition_ratio * 35
         )
         return round(max(0, min(score, 100)), 2)
-    
-    def reliability_score(self):
-        """
-        Reliability reflects how trustworthy the current report is,
-        based on transcript quality, duration, word count, clarity,
-        and whether the sample is repetitive / memorized.
-        """
-        score = 0
 
+    def reliability_score(self):
+        score = 0
         score += self.normalize(self.transcript_quality, 30, 85) * 35
         score += self.normalize(self.duration, 5, 15) * 20
         score += self.normalize(self.word_count, 5, 35) * 20
         score += self.normalize(self.clarity_db, 5, 25) * 15
 
-        # Penalty if repetitive / rhyme-like sample
         if self.is_repetitive_sample():
             score -= 15
 
@@ -191,6 +201,19 @@ class SpeechFeedback:
             score -= 10
 
         return round(max(10, min(score, 95)))
+
+    def reliability_label(self):
+        r = self.reliability_score()
+
+        if self.is_repetitive_sample():
+            return "Patterned Sample"
+
+        if r >= 75:
+            return "High Reliability"
+        elif r >= 50:
+            return "Moderate Reliability"
+        else:
+            return "Low Reliability"
 
     def reliability_note(self):
         r = self.reliability_score()
@@ -217,46 +240,6 @@ class SpeechFeedback:
                 "This speech sample was short, unclear, or limited in spoken content, "
                 "so the report should be treated as a preliminary screening snapshot only."
             )
-        
-    def reliability_label(self):
-        r = self.reliability_score()
-        if r >= 75:
-            return "High Reliability"
-        elif r >= 50:
-            return "Moderate Reliability"
-        else:
-            return "Low Reliability"
-
-    def reliability_note(self):
-        r = self.reliability_score()
-
-        if r >= 75:
-            return (
-                "This speech sample was clear enough and contained enough spoken content "
-                "to provide a fairly reliable AI-assisted communication snapshot."
-            )
-        elif r >= 50:
-            return (
-                "This speech sample provided a usable speech snapshot, but some results "
-                "should still be interpreted with moderate caution."
-            )
-        else:
-            return (
-                "This speech sample was short, unclear, or limited in spoken content, "
-                "so the report should be treated as a preliminary screening snapshot only."
-            )
-
-    def score_band(self, score):
-        if score >= 85:
-            return "Advanced"
-        elif score >= 70:
-            return "Strong"
-        elif score >= 55:
-            return "Developing"
-        elif score >= 40:
-            return "Emerging"
-        else:
-            return "Needs Support"
 
     def medical_disclaimer(self):
         return (
@@ -271,13 +254,11 @@ class SpeechFeedback:
     def analyze_audio(self):
         self.duration = len(self.y) / self.sr
 
-        # Energy
         try:
             self.energy = float(np.mean(librosa.feature.rms(y=self.y)))
         except:
             self.energy = 0
 
-        # Pauses + Smoothness
         try:
             intervals = librosa.effects.split(self.y, top_db=25)
             voiced = sum(e - s for s, e in intervals)
@@ -287,7 +268,6 @@ class SpeechFeedback:
             self.pauses_ratio = 0
             self.smoothness = 0
 
-        # Pitch
         try:
             f0 = librosa.yin(self.y, fmin=80, fmax=400, sr=self.sr)
             f0 = f0[np.isfinite(f0)]
@@ -300,7 +280,6 @@ class SpeechFeedback:
             self.pitch_mean = 0
             self.pitch_std = 0
 
-        # Clarity proxy
         try:
             rms = librosa.feature.rms(y=self.y)[0]
             noise = np.mean(np.sort(rms)[:max(5, len(rms)//10)])
@@ -316,15 +295,14 @@ class SpeechFeedback:
     def run_ai_analysis(self):
         result = {}
 
-        # -------------------------
-        # Whisper Transcription
-        # -------------------------
         try:
-            result = WHISPER_MODEL.transcribe(
+            model = get_whisper()
+            result = model.transcribe(
                 self.audio_path,
                 word_timestamps=True,
                 language="en"
             )
+
             self.transcript = result.get("text", "").strip()
             self.cleaned_transcript = self.clean_text(self.transcript)
         except Exception as e:
@@ -332,9 +310,6 @@ class SpeechFeedback:
             self.transcript = ""
             self.cleaned_transcript = ""
 
-        # -------------------------
-        # Pause Detection
-        # -------------------------
         try:
             segments = result.get("segments", [])
             prev_end = 0
@@ -355,9 +330,6 @@ class SpeechFeedback:
             self.pause_count = 0
             self.avg_pause = 0
 
-        # -------------------------
-        # Text Analysis
-        # -------------------------
         try:
             text = self.cleaned_transcript
             words = [w for w in text.split() if w.strip()]
@@ -367,13 +339,11 @@ class SpeechFeedback:
             fillers = ["um", "uh", "like", "you know", "hmm", "aaa", "mmm"]
             self.filler_count = sum(text.count(f) for f in fillers)
 
-            # Vocabulary ratio
             if self.word_count:
                 self.vocab_score = round((self.unique_word_count / self.word_count) * 100, 2)
             else:
                 self.vocab_score = 0
 
-            # Sentence length
             sentences = [
                 s.strip() for s in text.replace("?", ".").replace("!", ".").split(".")
                 if s.strip()
@@ -381,19 +351,14 @@ class SpeechFeedback:
             lengths = [len(s.split()) for s in sentences]
             self.avg_sentence_length = round(float(np.mean(lengths)), 2) if lengths else 0
 
-            # Transcript quality
             self.transcript_quality = self.transcript_quality_score(text)
 
-            # WPM based on actual transcript
             if self.duration > 0:
                 self.words_per_minute = round((self.word_count / self.duration) * 60, 2)
             else:
                 self.words_per_minute = 0
 
-            # Grammar score
             self.grammar_score = self.compute_grammar_score()
-
-            # Fluency score
             self.fluency_score = self.compute_fluency_score()
 
         except Exception as e:
@@ -407,14 +372,23 @@ class SpeechFeedback:
             self.unique_word_count = 0
             self.transcript_quality = 0
 
-        # -------------------------
-        # Pronunciation
-        # -------------------------
         try:
             self.pronunciation = self.pronunciation_score()
         except Exception as e:
             print("Pronunciation error:", e)
             self.pronunciation = 35
+
+    def score_band(self, score):
+        if score >= 85:
+            return "Advanced"
+        elif score >= 70:
+            return "Strong"
+        elif score >= 55:
+            return "Developing"
+        elif score >= 40:
+            return "Emerging"
+        else:
+            return "Needs Support"
 
     # =========================================================
     # GRAMMAR / FLUENCY / PRONUNCIATION
@@ -443,7 +417,6 @@ class SpeechFeedback:
         if self.filler_count >= 4:
             grammar_raw -= 6
 
-        # NEW: repetitive sample penalty
         if self.is_repetitive_sample():
             grammar_raw -= 10
 
@@ -480,7 +453,9 @@ class SpeechFeedback:
 
             y16k = librosa.resample(self.y, orig_sr=self.sr, target_sr=16000)
 
-            input_values = WAV2VEC_PROCESSOR(
+            wav2vec_model, wav2vec_processor = get_wav2vec()
+
+            input_values = wav2vec_processor(
                 y16k,
                 sampling_rate=16000,
                 return_tensors="pt",
@@ -488,10 +463,10 @@ class SpeechFeedback:
             ).input_values
 
             with torch.no_grad():
-                logits = WAV2VEC_MODEL(input_values).logits
+                logits = wav2vec_model(input_values).logits
 
             predicted_ids = torch.argmax(logits, dim=-1)
-            predicted = WAV2VEC_PROCESSOR.batch_decode(predicted_ids)[0].lower()
+            predicted = wav2vec_processor.batch_decode(predicted_ids)[0].lower()
             predicted = self.clean_text(predicted)
 
             original_words = set(self.cleaned_transcript.split())
@@ -503,7 +478,6 @@ class SpeechFeedback:
             score = (overlap / total) * 100
             adjusted = (score * 0.65) + 28
 
-            # Penalize low transcript quality slightly
             if self.transcript_quality < 35:
                 adjusted -= 8
 
@@ -514,7 +488,7 @@ class SpeechFeedback:
             return 35
 
     # =========================================================
-    # CORE UNIFIED SCORES (SINGLE SOURCE OF TRUTH)
+    # CORE UNIFIED SCORES
     # =========================================================
     def score_clarity(self):
         clarity_part = self.normalize(self.clarity_db, 6, 28) * 100
@@ -529,10 +503,6 @@ class SpeechFeedback:
         return round(max(10, min(score, 92)))
 
     def score_confidence(self):
-        """
-        Confidence should reflect speaking energy + flow,
-        but should not over-reward loud or fast speech alone.
-        """
         energy_part = self.normalize(self.energy, 0.015, 0.065) * 100
         pause_part = (1 - self.normalize(self.pauses_ratio, 0.12, 0.50)) * 100
         pace_part = self.normalize(self.words_per_minute, 65, 125) * 100
@@ -564,10 +534,6 @@ class SpeechFeedback:
             return 100
 
     def score_expression(self):
-        """
-        Expression should reflect healthy vocal variation,
-        but should NOT easily become 100 for rhyme / chant / memorized samples.
-        """
         pitch_part = self.normalize(self.pitch_std, 18, 95) * 100
 
         reliability_penalty = 0
@@ -579,19 +545,13 @@ class SpeechFeedback:
         elif self.duration < 8:
             reliability_penalty += 4
 
-        # NEW: repetitive rhyme / chant penalty
         if self.is_repetitive_sample():
             reliability_penalty += 18
 
         score = pitch_part - reliability_penalty
         return round(max(18, min(score, 85)))
-    
+
     def repetition_ratio(self):
-        """
-        Detect how repetitive the transcript is.
-        High repetition often means rhyme, memorized phrase,
-        chanting, or limited spontaneous language.
-        """
         words = self.cleaned_transcript.split()
         if not words:
             return 1.0
@@ -602,9 +562,6 @@ class SpeechFeedback:
         return round(1 - (unique / total), 2)
 
     def is_repetitive_sample(self):
-        """
-        Detect likely rhyme / repetitive / memorized speech.
-        """
         rep = self.repetition_ratio()
 
         repeated_phrase_markers = [
@@ -616,12 +573,8 @@ class SpeechFeedback:
         marker_hit = any(marker in self.cleaned_transcript for marker in repeated_phrase_markers)
 
         return rep >= 0.45 or marker_hit
-    
+
     def score_vocabulary(self):
-        """
-        Vocabulary should reward variety and sentence richness,
-        but should be careful with short, weak, or repetitive samples.
-        """
         vocab_part = self.normalize(self.vocab_score, 30, 80) * 100
         sentence_part = self.normalize(self.avg_sentence_length, 3.5, 9) * 100
         transcript_part = self.normalize(self.transcript_quality, 40, 85) * 100
@@ -639,12 +592,11 @@ class SpeechFeedback:
         elif self.word_count < 20:
             score -= 5
 
-        # NEW: repetitive sample penalty
         if self.is_repetitive_sample():
             score -= 12
 
         return round(max(12, min(score, 85)))
-    
+
     def compute_all_scores(self):
         self.score_cache = {
             "clarity": self.score_clarity(),
@@ -672,7 +624,6 @@ class SpeechFeedback:
             s["vocabulary"] * 0.13
         )
 
-        # Hard penalties to avoid fake high reports
         if s["fluency"] < 30:
             base -= 12
         if s["grammar"] < 30:
@@ -794,7 +745,7 @@ class SpeechFeedback:
             return "Within target"
 
     # =========================================================
-    # OBSERVATIONS
+    # OBSERVATIONS / FEEDBACK / IMPROVEMENT / PARENT
     # =========================================================
     def generate_observations(self):
         obs = []
@@ -836,36 +787,25 @@ class SpeechFeedback:
 
         return obs
 
-    # =========================================================
-    # DETAILED FEEDBACK
-    # =========================================================
     def ai_detailed_feedback(self):
         feedback = []
 
         if self.word_count < 8:
             feedback.append("A limited amount of spoken content was detected, so the child may need encouragement to respond in longer phrases or sentences.")
-
         if self.avg_sentence_length < 4:
             feedback.append("The child mostly uses very short sentences and may need support building fuller responses.")
-
         if self.filler_count > 3:
             feedback.append("Frequent hesitation sounds or filler words may reduce fluency and speaking confidence.")
-
         if self.pauses_ratio > 0.4:
             feedback.append("The child pauses often while speaking, which may reflect hesitation or difficulty organizing thoughts.")
-
         if self.score_cache["clarity"] < 55:
             feedback.append("Pronunciation and articulation need improvement, as some words may not be coming through clearly.")
-
         if self.pronunciation < 40:
             feedback.append("Pronunciation accuracy appears low in this sample and may benefit from repetition-based speaking practice.")
-
         if self.score_cache["vocabulary"] < 45:
             feedback.append("Vocabulary variety is currently limited, suggesting the child may rely on repeated familiar words.")
-
         if self.pitch_std < 14:
             feedback.append("Speech sounds somewhat monotone and could benefit from more expressive speaking activities.")
-
         if self.transcript_is_weak():
             feedback.append("Because the speech sample was short or unclear, some language-based results should be interpreted as preliminary rather than final.")
 
@@ -874,30 +814,21 @@ class SpeechFeedback:
 
         return " ".join(feedback)
 
-    # =========================================================
-    # IMPROVEMENT PLAN
-    # =========================================================
     def improvement_plan(self):
         plan = []
 
         if self.words_per_minute < 70:
             plan.append("Practice storytelling for 2–3 minutes daily to build speaking flow and verbal confidence.")
-
         if self.pauses_ratio > 0.4:
             plan.append("Encourage the child to describe pictures or daily events in one continuous sentence before stopping.")
-
         if self.pitch_std < 18:
             plan.append("Use emotion-based reading activities (happy, sad, excited voice) to improve vocal expression.")
-
         if self.score_cache["clarity"] < 60:
             plan.append("Practice simple pronunciation drills using short words and repeated sound patterns.")
-
         if self.pronunciation < 45:
             plan.append("Repeat simple words and short sentences slowly and clearly, focusing on mouth movement and sound accuracy.")
-
         if self.avg_sentence_length < 4:
             plan.append("Ask open-ended questions at home to encourage longer and more complete responses.")
-
         if self.score_cache["vocabulary"] < 50:
             plan.append("Introduce 3–5 new words each week and encourage the child to use them in daily sentences.")
 
@@ -906,9 +837,6 @@ class SpeechFeedback:
 
         return plan[:5]
 
-    # =========================================================
-    # PARENT HELPERS
-    # =========================================================
     def parent_strengths(self):
         s = self.score_cache
         strengths = []
@@ -999,12 +927,8 @@ class SpeechFeedback:
 
         labels = ["Clarity", "Confidence", "Fluency", "Pronunciation", "Expression", "Grammar"]
         values = [
-            s["clarity"],
-            s["confidence"],
-            s["fluency"],
-            s["pronunciation"],
-            s["expression"],
-            s["grammar"]
+            s["clarity"], s["confidence"], s["fluency"],
+            s["pronunciation"], s["expression"], s["grammar"]
         ]
 
         values += values[:1]
@@ -1014,7 +938,6 @@ class SpeechFeedback:
         fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
         ax.plot(angles, values, linewidth=2)
         ax.fill(angles, values, alpha=0.25)
-
         ax.set_xticks(angles[:-1])
         ax.set_xticklabels(labels)
         ax.set_yticks([20, 40, 60, 80, 100])
@@ -1033,11 +956,8 @@ class SpeechFeedback:
 
         labels = ["Clarity", "Confidence", "Fluency", "Pronunciation", "Expression"]
         values = [
-            s["clarity"],
-            s["confidence"],
-            s["fluency"],
-            s["pronunciation"],
-            s["expression"]
+            s["clarity"], s["confidence"], s["fluency"],
+            s["pronunciation"], s["expression"]
         ]
 
         fig, ax = plt.subplots(figsize=(8, 4))
@@ -1083,7 +1003,6 @@ class SpeechFeedback:
 
         story.append(ColorBanner(180 * mm))
         story.append(Spacer(1, 10))
-
         story.append(Paragraph("<b>Babblebunch AI</b>", styles['Title']))
         story.append(Paragraph("Advanced Speech Analysis Report", styles['Heading2']))
         story.append(Paragraph("<font color='#457B9D'>https://www.babblebunchai.com</font>", styles['Normal']))
@@ -1111,7 +1030,6 @@ class SpeechFeedback:
 
         story.append(Image(self.radar_chart(), width=120 * mm, height=120 * mm))
         story.append(Spacer(1, 10))
-
         story.append(Image(self.bar_chart(), width=150 * mm, height=70 * mm))
         story.append(Spacer(1, 10))
 
@@ -1191,7 +1109,6 @@ class SpeechFeedback:
 
         story.append(ColorBanner(180 * mm))
         story.append(Spacer(1, 8))
-
         story.append(Paragraph("<b>Babblebunch AI</b>", styles['Title']))
         story.append(Paragraph("Parent Speech Progress Report", styles['Heading2']))
         story.append(Paragraph("<font color='#457B9D'>https://www.babblebunchai.com</font>", styles['Normal']))
@@ -1282,8 +1199,4 @@ class SpeechFeedback:
 # OPTIONAL TEST RUN
 # =========================================================
 if __name__ == "__main__":
-    # Example:
-    # feedback = SpeechFeedback("sample.wav", "Aarav")
-    # print(feedback.generate_pdf())
-    # print(feedback.generate_parent_report())
     pass
