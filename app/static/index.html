@@ -12,48 +12,59 @@
 
     .card {
       background: white;
-      max-width: 420px;
+      max-width: 520px;
       margin: auto;
-      padding: 28px;
-      border-radius: 14px;
+      padding: 32px;
+      border-radius: 18px;
       box-shadow: 0 10px 25px rgba(0,0,0,.12);
       text-align: center;
     }
 
     h2 {
       color: #E63946;
-      margin-bottom: 6px;
+      font-size: 28px;
+      margin-bottom: 10px;
     }
 
     small {
-      color: #666;
+      display: block;
+      margin-bottom: 20px;
+      color: #555;
+      font-size: 16px;
     }
 
     input, button {
       width: 90%;
-      padding: 12px;
-      margin-top: 12px;
-      border-radius: 8px;
-      font-size: 14px;
+      padding: 14px;
+      margin-top: 14px;
+      border-radius: 10px;
+      font-size: 16px;
     }
 
     input {
-  border: 0.6px solid #d5d8e0;
-  border-radius: 6px;
-  padding: 10px 12px;
-  outline: none;
-  transition: all 0.2s ease;
-}
+      border: 1px solid #ccc;
+      outline: none;
+    }
 
-input:focus {
-  border-color: #E63946;
-  box-shadow: 0 0 0 2px rgba(230,57,70,0.12);
-}
+    input:focus {
+      border-color: #E63946;
+      box-shadow: 0 0 0 2px rgba(230,57,70,0.15);
+    }
 
     button {
       border: none;
       cursor: pointer;
       font-weight: bold;
+      transition: 0.2s;
+    }
+
+    button:hover {
+      opacity: 0.95;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
     }
 
     .primary {
@@ -72,27 +83,71 @@ input:focus {
     }
 
     .record-box {
-      margin-top: 15px;
-      padding: 15px;
-      border-radius: 10px;
+      margin-top: 20px;
+      padding: 20px;
+      border-radius: 14px;
       background: #f4f6ff;
     }
 
     #timer {
       font-size: 18px;
-      font-weight: bold;
       color: #E63946;
-      margin-top: 8px;
-    }
-
-    #status {
-      margin-top: 10px;
+      margin-top: 12px;
       font-weight: bold;
     }
 
-    .mic {
-      font-size: 30px;
+    #progressBox {
+      display: none;
+      margin-top: 20px;
+    }
+
+    #progressOuter {
+      width: 100%;
+      height: 18px;
+      background: #e5e5e5;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    #progressBar {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #ff5a5f, #E63946);
+      transition: width 0.4s ease;
+    }
+
+    #progressText {
       margin-top: 10px;
+      font-size: 16px;
+      color: #333;
+    }
+
+    #audioPreviewBox {
+      display: none;
+      margin-top: 18px;
+      padding: 14px;
+      background: #fafafa;
+      border-radius: 12px;
+      border: 1px solid #ddd;
+    }
+
+    audio {
+      width: 100%;
+      margin-top: 10px;
+    }
+
+    #successMsg {
+      display: none;
+      margin-top: 18px;
+      color: green;
+      font-weight: bold;
+      font-size: 16px;
+    }
+
+    #hintText {
+      margin-top: 10px;
+      font-size: 14px;
+      color: #666;
     }
   </style>
 </head>
@@ -104,128 +159,289 @@ input:focus {
   <h2>Babblebunch AI</h2>
   <small>Child Speech Analysis Report</small>
 
-  <input id="childName" placeholder="Child Name" required>
- 
- <div style="height:14px"></div>
+  <input id="childName" placeholder="Child Name">
 
-  📁 <b>Upload audio</b>
-  <input type="file" id="fileInput" accept="audio/*">
+  <input type="file" id="fileInput" accept="audio/*,video/*" onchange="previewUploadedAudio()">
 
-  <div class="record-box">
-    🎤 <b>Or record live</b>
-
-    <div class="mic" id="mic">🎙️</div>
-
-    <button class="secondary" onclick="startRecording()">Start Recording</button>
-    <button class="danger" onclick="stopRecording()">Stop Recording</button>
-
-    <div id="timer">00:00</div>
-    <div id="status"></div>
+  <div id="audioPreviewBox">
+    <div><b>🎧 Audio Preview</b></div>
+    <audio id="audioPreview" controls></audio>
   </div>
 
-  <button class="primary" onclick="submitAudio()">Generate Report</button>
+  <div class="record-box">
+    <button class="secondary" id="startBtn" onclick="startRecording()">Start</button>
+    <button class="danger" id="stopBtn" onclick="stopRecording()">Stop</button>
+    <div id="timer">00:00</div>
+    <div id="hintText">Tip: Best results usually come from 8–20 seconds of clear speech.</div>
+  </div>
+
+  <div id="progressBox">
+    <div id="progressOuter">
+      <div id="progressBar"></div>
+    </div>
+    <div id="progressText"></div>
+  </div>
+
+  <div id="successMsg">✅ Report downloaded successfully. Ready for new report.</div>
+
+  <button id="generateBtn" class="primary" onclick="submitAudio()">
+    Generate Report
+  </button>
 
 </div>
 
 <script>
 let recorder;
+let mediaStream = null;
 let audioChunks = [];
-let recording = false;
-let seconds = 0;
 let timerInterval;
+let seconds = 0;
+let isRecording = false;
+let isProcessing = false;
+let recordedBlob = null;
+let currentPreviewURL = null;
+const MAX_RECORD_SECONDS = 20;
 
-function startRecording() {
-  if (recording) return;
+// =========================
+// TIMER FORMAT
+// =========================
+function formatTime(sec) {
+  const mins = String(Math.floor(sec / 60)).padStart(2, "0");
+  const secs = String(sec % 60).padStart(2, "0");
+  return `${mins}:${secs}`;
+}
 
-  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+// =========================
+// SAFE PREVIEW URL CLEANUP
+// =========================
+function clearPreviewURL() {
+  if (currentPreviewURL) {
+    URL.revokeObjectURL(currentPreviewURL);
+    currentPreviewURL = null;
+  }
+}
+
+// =========================
+// START RECORDING
+// =========================
+async function startRecording() {
+  if (isRecording || isProcessing) return;
+
+  try {
+    // If uploaded file exists, clear it before recording
+    document.getElementById("fileInput").value = "";
+    clearPreviewURL();
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaStream = stream;
+
     recorder = new MediaRecorder(stream);
-    recorder.start();
     audioChunks = [];
-    recording = true;
+    recordedBlob = null;
 
-    recorder.ondataavailable = e => audioChunks.push(e.data);
+    recorder.ondataavailable = e => {
+      if (e.data.size > 0) {
+        audioChunks.push(e.data);
+      }
+    };
 
+    recorder.onstop = () => {
+      recordedBlob = new Blob(audioChunks, { type: "audio/webm" });
+      currentPreviewURL = URL.createObjectURL(recordedBlob);
+
+      document.getElementById("audioPreviewBox").style.display = "block";
+      document.getElementById("audioPreview").src = currentPreviewURL;
+    };
+
+    recorder.start();
+    isRecording = true;
     seconds = 0;
-    document.getElementById("status").innerText = "🔴 Recording in progress...";
-    document.getElementById("mic").innerText = "🔴🎙️";
+    document.getElementById("timer").innerText = "00:00";
 
     timerInterval = setInterval(() => {
       seconds++;
-      document.getElementById("timer").innerText =
-        String(Math.floor(seconds / 60)).padStart(2, "0") + ":" +
-        String(seconds % 60).padStart(2, "0");
+      document.getElementById("timer").innerText = formatTime(seconds);
+
+      // Auto-stop at max duration
+      if (seconds >= MAX_RECORD_SECONDS) {
+        stopRecording();
+      }
     }, 1000);
-  });
+
+  } catch (err) {
+    alert("Microphone access denied");
+    console.error(err);
+  }
 }
 
+// =========================
+// STOP RECORDING
+// =========================
 function stopRecording() {
-  if (!recording) return;
+  if (!recorder || !isRecording) return;
 
   recorder.stop();
-  recording = false;
   clearInterval(timerInterval);
+  isRecording = false;
 
-  document.getElementById("status").innerText = "✅ Recording stopped";
-  document.getElementById("mic").innerText = "🎙️";
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(track => track.stop());
+    mediaStream = null;
+  }
 }
 
+// =========================
+// PREVIEW UPLOADED AUDIO
+// =========================
+function previewUploadedAudio() {
+  const file = document.getElementById("fileInput").files[0];
+  if (!file) return;
+
+  // If user uploads file, clear recorded blob
+  recordedBlob = null;
+  audioChunks = [];
+
+  clearPreviewURL();
+  currentPreviewURL = URL.createObjectURL(file);
+
+  document.getElementById("audioPreviewBox").style.display = "block";
+  document.getElementById("audioPreview").src = currentPreviewURL;
+}
+
+// =========================
+// PROGRESS BAR
+// =========================
+function updateProgress(percent, text) {
+  document.getElementById("progressBox").style.display = "block";
+  document.getElementById("progressBar").style.width = percent + "%";
+  document.getElementById("progressText").innerText = text;
+}
+
+// =========================
+// RESET PAGE AFTER SUCCESS
+// =========================
+function resetFormAfterSuccess() {
+  document.getElementById("childName").value = "";
+  document.getElementById("fileInput").value = "";
+  document.getElementById("timer").innerText = "00:00";
+
+  clearPreviewURL();
+
+  audioChunks = [];
+  recordedBlob = null;
+  seconds = 0;
+  isRecording = false;
+  isProcessing = false;
+
+  document.getElementById("audioPreview").src = "";
+  document.getElementById("audioPreviewBox").style.display = "none";
+
+  document.getElementById("progressBar").style.width = "0%";
+  document.getElementById("progressText").innerText = "";
+  document.getElementById("progressBox").style.display = "none";
+
+  document.getElementById("generateBtn").disabled = false;
+  document.getElementById("generateBtn").innerText = "Generate Report";
+}
+
+// =========================
+// SUBMIT AUDIO
+// =========================
 async function submitAudio() {
-  const name = document.getElementById("childName").value;
+  if (isProcessing || isRecording) return;
+
+  const name = document.getElementById("childName").value.trim();
+  let audioFile = document.getElementById("fileInput").files[0];
+
   if (!name) {
     alert("Please enter child name");
     return;
   }
 
-  let audioFile = document.getElementById("fileInput").files[0];
-
-  if (!audioFile && audioChunks.length > 0) {
-    audioFile = new Blob(audioChunks, { type: "audio/wav" });
+  if (!audioFile && recordedBlob) {
+    audioFile = new File([recordedBlob], "recorded_audio.webm", { type: "audio/webm" });
   }
 
   if (!audioFile) {
-    alert("Please upload or record audio");
+    alert("Please upload or record audio first");
     return;
   }
+
+  isProcessing = true;
 
   const formData = new FormData();
   formData.append("child_name", name);
-  formData.append("audio", audioFile, "speech.wav");
+  formData.append("audio", audioFile);
 
-  document.getElementById("status").innerText = "⏳ Generating report...";
-
-  // ✅ DISABLE BUTTON HERE
-  const btn = document.querySelector(".primary");
+  const btn = document.getElementById("generateBtn");
   btn.disabled = true;
-  btn.innerText = "Generating...";
+  btn.innerText = "Processing...";
+  document.getElementById("successMsg").style.display = "none";
 
-  const res = await fetch("/analyze", {
-    method: "POST",
-    body: formData
-  });
+  updateProgress(10, "Uploading audio...");
 
-  if (!res.ok) {
-    alert("Failed to generate report");
+  const progressSteps = [
+    { percent: 25, text: "Converting audio..." },
+    { percent: 45, text: "Transcribing speech..." },
+    { percent: 65, text: "Analyzing speaking patterns..." },
+    { percent: 85, text: "Generating PDF reports..." }
+  ];
+
+  let stepIndex = 0;
+  const fakeProgress = setInterval(() => {
+    if (stepIndex < progressSteps.length) {
+      updateProgress(progressSteps[stepIndex].percent, progressSteps[stepIndex].text);
+      stepIndex++;
+    }
+  }, 1800);
+
+  try {
+    const res = await fetch("/analyze", {
+      method: "POST",
+      body: formData
+    });
+
+    clearInterval(fakeProgress);
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      alert("Server Error: " + errorText);
+      throw new Error("Backend failed");
+    }
+
+    updateProgress(100, "Done ✅");
+
+    const blob = await res.blob();
+
+    // Safe download
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${name}_Speech_Reports.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    document.getElementById("successMsg").style.display = "block";
+
+    setTimeout(() => {
+      resetFormAfterSuccess();
+    }, 2500);
+
+  } catch (e) {
+    console.error(e);
+    alert("Error generating report");
+
+    clearInterval(fakeProgress);
+    updateProgress(0, "");
+
+    document.getElementById("progressBox").style.display = "none";
+
+    isProcessing = false;
     btn.disabled = false;
     btn.innerText = "Generate Report";
-    return;
   }
-
-  const blob = await res.blob();
-
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "Babblebunch_AI_Reports.zip";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-
-  document.getElementById("status").innerText =
-    "✅ Reports downloaded successfully";
-
-  // ✅ RE-ENABLE BUTTON HERE
-  btn.disabled = false;
-  btn.innerText = "Generate Report";
 }
 </script>
 
