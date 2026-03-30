@@ -10,3 +10,4 @@ torch==2.1.2
 torchaudio==2.1.2
 speechbrain
 pydantic
+openai-whisper
